@@ -1,0 +1,109 @@
+version: '3'
+services:
+  fluentd:
+    build: ./fluentd
+    image: fluentd-elasticsearch:0.14.3
+    restart: always
+    networks:
+      default:
+        ipv4_address: 172.65.0.15
+    volumes:
+      - /var/lib/docker/:/var/lib/docker:ro
+      - fluentd_data:/fluentd/data
+    ports:
+      - 24224:24224
+      - 24224:24224/udp
+    depends_on:
+      - opensearch
+
+  opensearch:
+      image: opensearchproject/opensearch:1.2.3
+      restart: always
+      environment:
+        - cluster.name=opensearch-cluster
+        - node.name=opensearch
+        - bootstrap.memory_lock=true # along with the memlock settings below, disables swapping
+        - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" # minimum and maximum Java heap size, recommend setting both to 50% of system RAM
+        - "DISABLE_INSTALL_DEMO_CONFIG=true" # disables execution of install_demo_configuration.sh bundled with security plugin, which installs demo certificates and security configurations to OpenSearch
+        - "DISABLE_SECURITY_PLUGIN=true" # disables security plugin entirely in OpenSearch by setting plugins.security.disabled: true in opensearch.yml
+        - "discovery.type=single-node" # disables bootstrap checks that are enabled when network.host is set to a non-loopback address
+      ulimits:
+        memlock:
+          soft: -1
+          hard: -1
+        nofile:
+          soft: 65536
+          hard: 65536
+      volumes:
+        - opensearch-data:/usr/share/opensearch/data
+      ports:
+        - 9200:9200
+        - 9600:9600 # required for Performance Analyzer
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:1.2.0
+    restart: always
+    ports:
+      - 5601:5601
+    expose:
+      - "5601"
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
+      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true" # disables security dashboards plugin in OpenSearch Dashboards
+      
+  prometheus:
+    image: prom/prometheus
+    restart: always
+    volumes:
+      - ./prometheus:/etc/prometheus/
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - 9090:9090
+    depends_on:
+      - cadvisor    
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor
+    restart: always
+    privileged: true
+    command: 
+      - '--port=9080'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - 9080:9080    
+
+  grafana:
+    image: grafana/grafana
+    restart: always
+    environment:
+      GF_INSTALL_PLUGINS: 'grafana-clock-panel,grafana-simple-json-datasource'
+      GF_SECURITY_ADMIN_USER: 'admin'
+      GF_SECURITY_ADMIN_PASSWORD: 'admin'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    ports:
+      - 3000:3000
+    depends_on:
+      - prometheus
+
+volumes:
+  fluentd_data:
+  opensearch-data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: fluentd-network
+    external: true
